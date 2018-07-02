@@ -135,7 +135,12 @@ def resolve_in_source_root(source_root, paths):
     resolved_paths = []
     for path in paths:
         try:
-            resolved_paths.append(path.resolve().relative_to(source_root))
+            # Make absolute *without* resolving symlinks, because
+            # otherwise we might end up with a path into some |mdl:dir
+            # directory...
+            path = os.path.abspath(path)
+            path = pathlib.Path(path).relative_to(source_root)
+            resolved_paths.append(path)
         except ValueError:
             die("path is not inside source root {}: {}"
                 .format(repr(source_root, path)))
@@ -172,8 +177,8 @@ def main(args):
     if ((source_root is None or target_root is None or
          (not dir_args and not path_args))):
         die_with_usage()
-    source_root = source_root.resolve()
-    target_root = target_root.resolve()
+    source_root = pathlib.Path(os.path.abspath(source_root))
+    target_root = pathlib.Path(os.path.abspath(target_root))
     dir_subpaths = resolve_in_source_root(source_root, dir_args)
     subpaths = resolve_in_source_root(source_root, path_args)
     exclude_paths = set(resolve_in_source_root(source_root, exclude_args))
