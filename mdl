@@ -94,7 +94,6 @@ def mirror_directory(source_root, target_root, subpath):
         if not source_entry.is_dir() and not is_stub(source_entry):
             target_entry = target_root / subpath / source_entry.name
             if is_nonstub(target_entry):
-                print("is nonstub: {}".format(target_entry))
                 die("already exists: {}".format(target_entry))
             try:
                 target_entry.unlink()
