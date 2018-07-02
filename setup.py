@@ -8,7 +8,7 @@ setup(
     license="MIT",
     install_requires=[],
     name="madeline",
-    scripts=["mdl"],
+    scripts=["madeline"],
     url="https://github.com/raxod502/madeline",
     version=None,
 )

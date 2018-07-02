@@ -66,9 +66,10 @@ def get_dir_subpaths(source_root, subpath, exclude_paths):
     if is_nonstub(abs_subpath):
         abs_parent_dir = abs_subpath
         while abs_parent_dir != source_root:
+            abs_parent_dir = abs_parent_dir.parent
             if abs_parent_dir.is_dir():
                 dir_subpaths.append(abs_parent_dir.relative_to(source_root))
-            abs_parent_dir = abs_parent_dir.parent
+    dir_subpaths.reverse()
     if abs_subpath.is_dir():
         for current_dir, subdirs, files in os.walk(abs_subpath):
             dir_subpaths.append(
