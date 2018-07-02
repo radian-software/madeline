@@ -3,6 +3,7 @@
 import collections
 import os
 import pathlib
+import shutil
 import sys
 
 ## General utility functions
@@ -13,8 +14,8 @@ def remove_duplicates(lst):
 ## Logging and exit
 
 USAGE = """\
-usage: mdl --source-root <source> --target-root <target>
-           [--exclude <path>]... [<path>...]\
+usage: mdl --source <source> --target <target>
+           [--exclude <path>]... <path>...\
 """
 
 def warn(message):
@@ -37,7 +38,7 @@ def is_stub(path):
         return False
 
 def is_nonstub(path):
-    return path.exists() or path.is_symlink()
+    return not is_stub(path) and (path.exists() or path.is_symlink())
 
 def get_stub_type(path):
     if path.is_symlink():
@@ -47,7 +48,8 @@ def get_stub_type(path):
     elif path.is_file():
         return "file"
     else:
-        die("not a file, directory, or symbolic link: " + path)
+        die("not a file, directory, or symbolic link: {}"
+            .format(path))
 
 ## Filesystem operations
 
@@ -87,22 +89,33 @@ def mirror_directory(source_root, target_root, subpath):
     try:
         target_path.mkdir(exist_ok=True)
     except FileExistsError:
-        die("already exists: " + target_path)
+        die("already exists: {}".format(target_path))
     for source_entry in (source_root / subpath).iterdir():
-        target_entry = target_root / subpath / source_entry.name
-        make_stub(target_entry, get_stub_type(source_entry))
+        if not source_entry.is_dir() and not is_stub(source_entry):
+            target_entry = target_root / subpath / source_entry.name
+            if is_nonstub(target_entry):
+                print("is nonstub: {}".format(target_entry))
+                die("already exists: {}".format(target_entry))
+            try:
+                target_entry.unlink()
+            except FileNotFoundError:
+                pass
+            make_stub(target_entry, get_stub_type(source_entry))
 
-def mirror_tree(source_root, target_root, subpath):
+def mirror_tree(source_root, target_root, subpath, toplevel=True):
     source_path = source_root / subpath
     if source_path.is_dir():
         for entry in source_path.iterdir():
-            mirror_tree(source_root, target_root, entry)
+            mirror_tree(
+                source_root, target_root, entry.relative_to(source_root),
+                toplevel=False)
         source_path.rmdir()
-        make_stub(source_path, "dir")
+        if toplevel:
+            make_stub(source_path, "dir")
     else:
-        mirror_file(source_root, target_root, subpath)
+        mirror_file(source_root, target_root, subpath, toplevel)
 
-def mirror_file(source_root, target_root, subpath):
+def mirror_file(source_root, target_root, subpath, toplevel):
     source_path = source_root / subpath
     target_path = target_root / subpath
     if is_stub(source_path):
@@ -110,10 +123,12 @@ def mirror_file(source_root, target_root, subpath):
         return
     stub_type = get_stub_type(source_path)
     if is_nonstub(target_path):
-        die("already exists: " + target_path)
+        die("already exists: {}".format(target_path))
     target_path.unlink()
-    os.copy(source_root, target_root)
-    make_stub(source_path, stub_type)
+    shutil.copyfile(source_path, target_path)
+    source_path.unlink()
+    if toplevel:
+        make_stub(source_path, stub_type)
 
 ## Main logic
 
@@ -155,17 +170,17 @@ def main(args):
             continue
         path_args.append(subpath)
         args = args[1:]
-    if (source_root is None or target_root is None or
-        (not dir_args and not path_args)):
+    if ((source_root is None or target_root is None or
+         (not dir_args and not path_args))):
         die_with_usage()
     source_root = source_root.resolve()
     target_root = target_root.resolve()
-    dir_subpaths = resolve_in_source_root(dir_args)
-    subpaths = resolve_in_source_root(path_args)
-    exclude_paths = set(resolve_in_source_root(exclude_args))
+    dir_subpaths = resolve_in_source_root(source_root, dir_args)
+    subpaths = resolve_in_source_root(source_root, path_args)
+    exclude_paths = set(resolve_in_source_root(source_root, exclude_args))
     for subpath in dir_subpaths + subpaths:
         dir_subpaths.extend(get_dir_subpaths(
-            source_root, target_root, subpath, exclude_paths))
+            source_root, subpath, exclude_paths))
     for dir_subpath in remove_duplicates(dir_subpaths):
         mirror_directory(source_root, target_root, dir_subpath)
     for subpath in remove_duplicates(subpaths):
