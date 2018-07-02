@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+
+import collections
+import os
+import pathlib
+import sys
+
+## General utility functions
+
+def remove_duplicates(lst):
+    return list(collections.OrderedDict.fromkeys(lst))
+
+## Logging and exit
+
+def warn(message):
+    print("mdl: " + message, file=sys.stderr)
+
+def die(message):
+    print("mdl: " + message, file=sys.stderr)
+    sys.exit(1)
+
+## Filesystem queries
+
+def is_stub(path):
+    try:
+        return os.readlink(path).startswith("|mdl:")
+    except OSError:
+        return False
+
+def is_nonstub(path):
+    return path.exists() or path.is_symlink()
+
+def get_stub_type(path):
+    if path.is_symlink():
+        return "link"
+    elif path.is_dir():
+        return "dir"
+    elif path.is_file():
+        return "file"
+    else:
+        die("not a file, directory, or symbolic link: " + path)
+
+## Filesystem operations
+
+def make_stub(path, stub_type):
+    assert stub_type in ("dir", "file", "link")
+    os.symlink("|mdl:" + stub_type, path)
+
+## Mirroring algorithm
+
+def get_dir_subpaths(source_root, subpath, exclude_paths):
+    abs_exclude_paths = set(source_root / path for path in exclude_paths)
+    dir_subpaths = []
+    abs_subpath = source_root / subpath
+    if is_nonstub(abs_subpath):
+        abs_parent_dir = abs_subpath
+        while abs_parent_dir != source_root:
+            if abs_parent_dir.is_dir():
+                dir_subpaths.append(abs_parent_dir.relative_to(source_root))
+            abs_parent_dir = abs_parent_dir.parent
+    if abs_subpath.is_dir():
+        for current_dir, subdirs, files in os.walk(abs_subpath):
+            dir_subpaths.append(
+                pathlib.Path(current_dir).relative_to(source_root))
+            abs_current_dir = source_root / current_dir
+            included_subdirs = []
+            for subdir in subdirs:
+                abs_subdir = abs_current_dir / subdir
+                if abs_subdir not in abs_exclude_paths:
+                    included_subdirs.append(subdir)
+            subdirs[:] = included_subdirs
+    return dir_subpaths
+
+def mirror_directory(source_root, target_root, subpath):
+    target_path = target_root / subpath
+    if is_stub(target_path):
+        target_path.unlink()
+    try:
+        target_path.mkdir(exist_ok=True)
+    except FileExistsError:
+        die("already exists: " + target_path)
+    for source_entry in (source_root / subpath).iterdir():
+        target_entry = target_root / subpath / source_entry.name
+        make_stub(target_entry, get_stub_type(source_entry))
+
+def mirror_tree(source_root, target_root, subpath):
+    source_path = source_root / subpath
+    if source_path.is_dir():
+        for entry in source_path.iterdir():
+            mirror_tree(source_root, target_root, entry)
+        source_path.rmdir()
+        make_stub(source_path, "dir")
+    else:
+        mirror_file(source_root, target_root, subpath)
+
+def mirror_file(source_root, target_root, subpath):
+    source_path = source_root / subpath
+    target_path = target_root / subpath
+    if is_stub(source_path):
+        os.unlink(source_path)
+        return
+    stub_type = get_stub_type(source_path)
+    if is_nonstub(target_path):
+        die("already exists: " + target_path)
+    target_path.unlink()
+    os.copy(source_root, target_root)
+    make_stub(source_path, stub_type)
+
+## Main logic
+
+def resolve_in_source_root(source_root, paths):
+    resolved_paths = []
+    for path in paths:
+        try:
+            resolved_paths.append(path.resolve().relative_to(source_root))
+        except ValueError:
+            die("path is not inside source root {}: {}"
+                .format(repr(source_root, path)))
+    return resolved_paths
+
+def main(args):
+    source_root = None
+    target_root = None
+    dir_args = []
+    path_args = []
+    exclude_args = []
+    while args:
+        if args[0] == "--source":
+            source_root = pathlib.Path(args[1])
+            args = args[2:]
+            continue
+        if args[0] == "--target":
+            target_root = pathlib.Path(args[1])
+            args = args[2:]
+            continue
+        if args[0] == "--exclude":
+            exclude_args.append(pathlib.Path(args[1]))
+            args = args[2:]
+            continue
+        subpath = pathlib.Path(args[0])
+        if args[0].endswith(os.sep):
+            dir_args.append(subpath)
+            continue
+        path_args.append(subpath)
+        args = args[1:]
+    source_root = source_root.resolve()
+    target_root = target_root.resolve()
+    dir_subpaths = resolve_in_source_root(dir_args)
+    subpaths = resolve_in_source_root(path_args)
+    exclude_paths = set(resolve_in_source_root(exclude_args))
+    for subpath in dir_subpaths + subpaths:
+        dir_subpaths.extend(get_dir_subpaths(
+            source_root, target_root, subpath, exclude_paths))
+    for dir_subpath in remove_duplicates(dir_subpaths):
+        mirror_directory(source_root, target_root, dir_subpath)
+    for subpath in remove_duplicates(subpaths):
+        mirror_tree(source_root, target_root, subpath)
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
+
+# Local Variables:
+# outline-regexp: "^##+"
+# End:
