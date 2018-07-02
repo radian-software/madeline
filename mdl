@@ -12,11 +12,20 @@ def remove_duplicates(lst):
 
 ## Logging and exit
 
+USAGE = """\
+usage: mdl --source-root <source> --target-root <target>
+           [--exclude <path>]... [<path>...]\
+"""
+
 def warn(message):
     print("mdl: " + message, file=sys.stderr)
 
 def die(message):
     print("mdl: " + message, file=sys.stderr)
+    sys.exit(1)
+
+def die_with_usage():
+    print(USAGE, file=sys.stderr)
     sys.exit(1)
 
 ## Filesystem queries
@@ -119,6 +128,9 @@ def resolve_in_source_root(source_root, paths):
     return resolved_paths
 
 def main(args):
+    if args and args[0] in ("-h", "-?", "-help", "--help", "help"):
+        print(USAGE)
+        sys.exit(0)
     source_root = None
     target_root = None
     dir_args = []
@@ -143,6 +155,9 @@ def main(args):
             continue
         path_args.append(subpath)
         args = args[1:]
+    if (source_root is None or target_root is None or
+        (not dir_args and not path_args)):
+        die_with_usage()
     source_root = source_root.resolve()
     target_root = target_root.resolve()
     dir_subpaths = resolve_in_source_root(dir_args)
@@ -155,6 +170,7 @@ def main(args):
         mirror_directory(source_root, target_root, dir_subpath)
     for subpath in remove_duplicates(subpaths):
         mirror_tree(source_root, target_root, subpath)
+    sys.exit(0)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
