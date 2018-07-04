@@ -15,7 +15,7 @@ def remove_duplicates(lst):
 
 USAGE = """\
 usage: mdl --source <source> --target <target>
-           (send | get) [--exclude <path>]... <path>...\
+           (put | get) [--exclude <path>]... <path>...\
 """
 
 def warn(message):
@@ -83,6 +83,10 @@ def mirror_subpath(source_root, target_root, path, exclude_paths,
             if is_nonstub(abs_target_parent):
                 die("already exists and not a directory: {}"
                     .format(abs_target_parent))
+            try:
+                abs_target_parent.unlink()
+            except FileNotFoundError:
+                pass
             abs_target_parent.mkdir()
     if abs_source_path.is_dir():
         # If there is a file or symlink, we can't mirror a directory
@@ -221,7 +225,7 @@ def main(args):
             exclude_args.append(pathlib.Path(args[1]))
             args = args[2:]
             continue
-        if reverse is None and args[0] in ("send", "get"):
+        if reverse is None and args[0] in ("put", "get"):
             reverse = args[0] == "get"
             args = args[1:]
             continue
