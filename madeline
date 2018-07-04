@@ -232,9 +232,10 @@ def main(args):
         subpath = pathlib.Path(args[0])
         if args[0].endswith(os.sep):
             dir_args.append(subpath)
-            continue
-        path_args.append(subpath)
+        else:
+            path_args.append(subpath)
         args = args[1:]
+        continue
     if ((source_root is None or
          target_root is None or
          reverse is None or
