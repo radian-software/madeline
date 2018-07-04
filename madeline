@@ -195,7 +195,7 @@ def resolve_in_root(source_root, target_root, paths):
             path = pathlib.Path(path).relative_to(source_root)
         except ValueError:
             try:
-                path = pathlib.path(path).relative_to(target_root)
+                path = pathlib.Path(path).relative_to(target_root)
             except ValueError:
                 die("path is not inside source or target root: {}"
                     .format(repr(path)))
