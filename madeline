@@ -15,7 +15,7 @@ def remove_duplicates(lst):
 
 USAGE = """\
 usage: mdl --source <source> --target <target>
-           [--exclude <path>]... <path>...\
+           (send | get) [--exclude <path>]... <path>...\
 """
 
 def warn(message):
@@ -59,76 +59,117 @@ def make_stub(path, stub_type):
 
 ## Mirroring algorithm
 
-def get_dir_subpaths(source_root, subpath, exclude_paths):
-    abs_exclude_paths = set(source_root / path for path in exclude_paths)
-    dir_subpaths = []
-    abs_subpath = source_root / subpath
-    if is_nonstub(abs_subpath):
-        abs_parent_dir = abs_subpath
-        while abs_parent_dir != source_root:
-            abs_parent_dir = abs_parent_dir.parent
-            if abs_parent_dir.is_dir():
-                dir_subpaths.append(abs_parent_dir.relative_to(source_root))
-    dir_subpaths.reverse()
-    if abs_subpath.is_dir():
-        for current_dir, subdirs, files in os.walk(abs_subpath):
-            dir_subpaths.append(
-                pathlib.Path(current_dir).relative_to(source_root))
-            abs_current_dir = source_root / current_dir
-            included_subdirs = []
-            for subdir in subdirs:
-                abs_subdir = abs_current_dir / subdir
-                if abs_subdir not in abs_exclude_paths:
-                    included_subdirs.append(subdir)
-            subdirs[:] = included_subdirs
-    return dir_subpaths
-
-def mirror_directory(source_root, target_root, subpath):
-    target_path = target_root / subpath
-    if is_stub(target_path):
-        target_path.unlink()
-    try:
-        target_path.mkdir(exist_ok=True)
-    except FileExistsError:
-        die("already exists: {}".format(target_path))
-    for source_entry in (source_root / subpath).iterdir():
-        if not source_entry.is_dir() and not is_stub(source_entry):
-            target_entry = target_root / subpath / source_entry.name
-            if is_nonstub(target_entry):
-                die("already exists: {}".format(target_entry))
-            try:
-                target_entry.unlink()
-            except FileNotFoundError:
-                pass
-            make_stub(target_entry, get_stub_type(source_entry))
-
-def mirror_tree(source_root, target_root, subpath, toplevel=True):
-    source_path = source_root / subpath
-    if source_path.is_dir():
-        for entry in source_path.iterdir():
-            mirror_tree(
-                source_root, target_root, entry.relative_to(source_root),
-                toplevel=False)
-        source_path.rmdir()
-        if toplevel:
-            make_stub(source_path, "dir")
+def mirror_subpath(source_root, target_root, path, exclude_paths,
+                   recursive, with_parents, create_stub):
+    exclude_paths = [path for path in exclude_paths
+                     if is_nonstub(source_root / path)]
+    abs_source_path = source_root / path
+    abs_target_path = target_root / path
+    # Only create parent directories in the target tree if we actually
+    # have something to mirror.
+    if with_parents and is_nonstub(abs_source_path):
+        abs_target_path_parents = abs_target_path.parents
+        abs_target_path_parents.reverse()
+        # Get list of directories from target_root down to the direct
+        # parent of abs_target_path.
+        target_root_idx = abs_target_path_parents.index(target_root)
+        abs_target_path_parents = abs_target_path_parents[target_root_idx:]
+        # Create parent directories.
+        for abs_target_parent in abs_target_path_parents:
+            if abs_target_parent.is_dir():
+                continue
+            if is_nonstub(abs_target_parent):
+                die("already exists and not a directory: {}"
+                    .format(abs_target_parent))
+            abs_target_parent.mkdir()
+    if abs_source_path.is_dir():
+        # If there is a file or symlink, we can't mirror a directory
+        # there.
+        if not abs_target_path.is_dir() and is_nonstub(abs_target_path):
+            die("already exists and not a directory: {}"
+                .format(abs_target_path))
+        # If there was previously a stub there, get rid of it.
+        try:
+            abs_target_path.unlink()
+        except FileNotFoundError:
+            pass
+        abs_target_path.mkdir()
+        abs_source_path_children = list(abs_source_path.iterdir())
+        # We will skip creating stubs in the source directory if we
+        # are just going to remove it anyway, so whether the directory
+        # will be removed needs to be determined ahead of time. We
+        # start by guessing that we will be able to move all of the
+        # contents to the target directory only in a recursive
+        # mirroring operation.
+        should_delete_directory = recursive
+        # However, if any subpaths of the source directory exist and
+        # are excluded from mirroring, we can't move them. Therefore
+        # we must leave the source directoy.
+        if should_delete_directory:
+            for exclude_path in exclude_paths:
+                if abs_target_path in (target_root / exclude_path).parents:
+                    should_delete_directory = False
+        for abs_source_path_child in abs_source_path_children:
+            path_child = abs_source_path_child.relative_to(source_root)
+            abs_target_path_child = target_root / path_child
+            # If we are mirroring only the directory and not its
+            # children, or if the child is excluded, then only update
+            # the stub in the target tree.
+            if not recursive or path_child in exclude_paths:
+                if is_nonstub(abs_source_path_child):
+                    # We can't have a file or directory on both sides.
+                    if is_nonstub(abs_target_path_child):
+                        die("already exists: {}"
+                            .format(abs_target_path_child))
+                    stub_type = get_stub_type(abs_source_path_child)
+                    # Remove any existing stub. The type might have
+                    # changed.
+                    try:
+                        abs_target_path_child.unlink()
+                    except FileNotFoundError:
+                        pass
+                    make_stub(abs_target_path_child, stub_type)
+                else:
+                    # There's no file or directory in the source
+                    # directory, so make sure we have a stub correctly
+                    # corresponding to what's in the target directory
+                    # (or remove any stale stub previously created).
+                    try:
+                        abs_source_path_child.unlink()
+                    except FileNotFoundError:
+                        pass
+                    if is_nonstub(abs_target_path_child):
+                        stub_type = get_stub_type(abs_target_path_child)
+                        make_stub(abs_source_path_child, stub_type)
+            else:
+                # Doing a full mirror.
+                mirror_subpath(
+                    source_root, target_root, path_child, exclude_paths,
+                    recursive=True, with_parents=False,
+                    create_stub=not should_delete_directory)
+            # There shouldn't be anything left in the source directory
+            # by now if should_delete_directory was true.
+            if should_delete_directory:
+                abs_source_path.rmdir()
+    elif is_nonstub(abs_source_path):
+        if is_nonstub(abs_target_path):
+            die("already exists: {}".format(abs_target_path))
+        stub_type = get_stub_type(abs_source_path)
+        try:
+            abs_target_path.unlink()
+        except FileNotFoundError:
+            pass
+        shutil.copy(abs_source_path, abs_target_path)
+        abs_source_path.unlink()
+        make_stub(abs_source_path, stub_type)
     else:
-        mirror_file(source_root, target_root, subpath, toplevel)
-
-def mirror_file(source_root, target_root, subpath, toplevel):
-    source_path = source_root / subpath
-    target_path = target_root / subpath
-    if is_stub(source_path):
-        os.unlink(source_path)
-        return
-    stub_type = get_stub_type(source_path)
-    if is_nonstub(target_path):
-        die("already exists: {}".format(target_path))
-    target_path.unlink()
-    shutil.copyfile(source_path, target_path)
-    source_path.unlink()
-    if toplevel:
-        make_stub(source_path, stub_type)
+        try:
+            os.unlink(abs_source_path)
+        except FileNotFoundError:
+            pass
+        if is_nonstub(abs_target_path):
+            stub_type = get_stub_type(abs_target_path)
+            make_stub(abs_source_path, stub_type)
 
 ## Main logic
 
@@ -153,6 +194,7 @@ def main(args):
         sys.exit(0)
     source_root = None
     target_root = None
+    reverse = None
     dir_args = []
     path_args = []
     exclude_args = []
@@ -169,27 +211,32 @@ def main(args):
             exclude_args.append(pathlib.Path(args[1]))
             args = args[2:]
             continue
+        if reverse is None and args[0] in ("send", "get"):
+            reverse = args[0] == "get"
+            args = args[1:]
+            continue
         subpath = pathlib.Path(args[0])
         if args[0].endswith(os.sep):
             dir_args.append(subpath)
             continue
         path_args.append(subpath)
         args = args[1:]
-    if ((source_root is None or target_root is None or
+    if ((source_root is None or
+         target_root is None or
+         reverse is None or
          (not dir_args and not path_args))):
         die_with_usage()
     source_root = pathlib.Path(os.path.abspath(source_root))
     target_root = pathlib.Path(os.path.abspath(target_root))
     dir_subpaths = resolve_in_source_root(source_root, dir_args)
     subpaths = resolve_in_source_root(source_root, path_args)
-    exclude_paths = set(resolve_in_source_root(source_root, exclude_args))
-    for subpath in dir_subpaths + subpaths:
-        dir_subpaths.extend(get_dir_subpaths(
-            source_root, subpath, exclude_paths))
-    for dir_subpath in remove_duplicates(dir_subpaths):
-        mirror_directory(source_root, target_root, dir_subpath)
-    for subpath in remove_duplicates(subpaths):
-        mirror_tree(source_root, target_root, subpath)
+    exclude_paths = resolve_in_source_root(source_root, exclude_args)
+    for dir_subpath in dir_subpaths:
+        mirror_subpath(source_root, target_root, dir_subpath, exclude_paths,
+                       recursive=False, with_parents=True, create_stub=True)
+    for subpath in subpaths:
+        mirror_subpath(source_root, target_root, subpath, exclude_paths,
+                       recursive=True, with_parents=True, create_stub=True)
     sys.exit(0)
 
 if __name__ == "__main__":
