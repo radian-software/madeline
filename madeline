@@ -14,15 +14,15 @@ def remove_duplicates(lst):
 ## Logging and exit
 
 USAGE = """\
-usage: mdl --source <source> --target <target>
-           (put | get) [--exclude <path>]... <path>...\
+usage: madeline --source <source> --target <target>
+                (put | get) [--exclude <path>]... <path>...\
 """
 
 def warn(message):
-    print("mdl: " + message, file=sys.stderr)
+    print("madeline: " + message, file=sys.stderr)
 
 def die(message):
-    print("mdl: " + message, file=sys.stderr)
+    print("madeline: " + message, file=sys.stderr)
     sys.exit(1)
 
 def die_with_usage():
@@ -33,7 +33,7 @@ def die_with_usage():
 
 def is_stub(path):
     try:
-        return os.readlink(path).startswith("|mdl:")
+        return os.readlink(path).startswith("|madeline:")
     except OSError:
         return False
 
@@ -55,7 +55,7 @@ def get_stub_type(path):
 
 def write_stub(path, stub_type):
     assert stub_type in ("dir", "file", "link")
-    os.symlink("|mdl:" + stub_type, path)
+    os.symlink("|madeline:" + stub_type, path)
 
 ## Mirroring algorithm
 
@@ -188,8 +188,8 @@ def resolve_in_root(source_root, target_root, paths):
     resolved_paths = []
     for path in paths:
         # Make absolute *without* resolving symlinks, because
-        # otherwise we might end up with a path into some |mdl:dir
-        # directory...
+        # otherwise we might end up with a path into some
+        # |madeline:dir directory...
         path = os.path.abspath(path)
         try:
             path = pathlib.Path(path).relative_to(source_root)
