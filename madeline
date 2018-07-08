@@ -5,6 +5,7 @@ import os
 import pathlib
 import shutil
 import sys
+import traceback
 
 ## General utility functions
 
@@ -270,7 +271,17 @@ def main(args):
     sys.exit(0)
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    args = sys.argv[1:]
+    debug = False
+    if args and args[0] == "--debug":
+        debug = True
+        args = args[1:]
+    try:
+        main(args)
+    except SystemExit as e:
+        if debug and e.code != 0:
+            traceback.print_exc()
+        raise
 
 # Local Variables:
 # outline-regexp: "^##+"
