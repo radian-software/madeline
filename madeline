@@ -246,6 +246,11 @@ def main(args):
          reverse is None or
          (not dir_args and not path_args))):
         die_with_usage()
+    try:
+        os.getcwd()
+    except FileNotFoundError:
+        die("working directory does not exist: {}"
+            .format(os.environ.get("PWD", "(unknown directory)")))
     source_root = pathlib.Path(os.path.abspath(source_root))
     target_root = pathlib.Path(os.path.abspath(target_root))
     if ((source_root in target_root.parents or
