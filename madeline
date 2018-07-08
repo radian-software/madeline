@@ -78,16 +78,10 @@ def mirror_subpath(source_root, target_root, path, exclude_paths,
         abs_target_path_parents = abs_target_path_parents[target_root_idx:]
         # Create parent directories.
         for abs_target_parent in abs_target_path_parents:
-            if abs_target_parent.is_dir():
-                continue
-            if is_nonstub(abs_target_parent):
-                die("already exists and not a directory: {}"
-                    .format(abs_target_parent))
-            try:
-                abs_target_parent.unlink()
-            except FileNotFoundError:
-                pass
-            abs_target_parent.mkdir()
+            path_parent = abs_target_parent.relative_to(target_root)
+            mirror_subpath(
+                source_root, target_root, path_parent, exclude_paths,
+                recursive=False, with_parents=False, create_stub=True)
     if abs_source_path.is_dir():
         # If there is a file or symlink, we can't mirror a directory
         # there.
@@ -100,7 +94,7 @@ def mirror_subpath(source_root, target_root, path, exclude_paths,
                 abs_target_path.unlink()
             except FileNotFoundError:
                 pass
-        abs_target_path.mkdir(exist_ok=True)
+            abs_target_path.mkdir()
         abs_source_path_children = list(abs_source_path.iterdir())
         # We will skip creating stubs in the source directory if we
         # are just going to remove it anyway, so whether the directory
@@ -123,7 +117,18 @@ def mirror_subpath(source_root, target_root, path, exclude_paths,
             # children, or if the child is excluded, then only update
             # the stub in the target tree.
             if not recursive or path_child in exclude_paths:
-                if is_nonstub(abs_source_path_child):
+                if abs_source_path_child.is_dir():
+                    if abs_target_path_child.is_dir():
+                        continue
+                    if is_nonstub(abs_target_path_child):
+                        die("already exists and not a directory: {}"
+                            .format(abs_target_path_child))
+                    try:
+                        abs_target_path_child.unlink()
+                    except FileNotFoundError:
+                        pass
+                    write_stub(abs_target_path_child, "dir")
+                elif is_nonstub(abs_source_path_child):
                     # We can't have a file or directory on both sides.
                     if is_nonstub(abs_target_path_child):
                         die("already exists: {}"
