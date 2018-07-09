@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import abc
+import getpass
 import os
 import pathlib
+import re
 import shutil
 import stat
 import sys
@@ -196,11 +198,42 @@ class LocalPath(Path):
     def unlink(self):
         self.path.unlink()
 
+class Host:
+
+    def __init__(self, hostname, user=None, port=None):
+        self.hostname = hostname
+        self.user = user or getpass.getuser()
+        self.port = port or 22
+
+    def __eq__(self, other):
+        if isinstance(other, Host):
+            return (self.user == other.user and
+                    self.hostname == other.hostname and
+                    self.port == other.port)
+        return False
+
+    def __hash__(self):
+        return hash((self.user, self.hostname, self.port))
+
+    def __str__(self):
+        return self.hostname
+
+    def sftp(self):
+        # FIXME
+        raise NotImplementedError
+
 class RemotePath(Path):
 
-    def __init__(self, host, sftp, path):
+    sftp_pool = {}
+
+    @property
+    def sftp(self):
+        if self.host not in RemotePath.sftp_pool:
+            RemotePath.sftp_pool[self.host] = self.host.sftp()
+        return RemotePath.sftp_pool[self.host]
+
+    def __init__(self, host, path):
         self.host = host
-        self.sftp = sftp
         self.path = path
         if not self.path.is_absolute():
             raise ValueError
@@ -215,13 +248,13 @@ class RemotePath(Path):
 
     def __truediv__(self, other):
         if isinstance(other, Subpath):
-            return RemotePath(self.host, self.sftp, self.path / other.path)
+            return RemotePath(self.host, self.path / other.path)
         raise ValueError
 
     @property
     def parents(self):
         for parent in self.path.parents:
-            yield RemotePath(self.host, self.sftp, parent)
+            yield RemotePath(self.host, parent)
 
     def relative_to(self, other):
         if isinstance(other, RemotePath) and self.host == other.host:
@@ -239,7 +272,7 @@ class RemotePath(Path):
 
     def iterdir(self):
         for subdir in self.sftp.listdir_iter(self.path):
-            yield RemotePath(self.host, self.sftp, self.path / subdir)
+            yield RemotePath(self.host, self.path / subdir)
 
     def readlink(self):
         return self.sftp.readlink(self.path)
@@ -262,8 +295,7 @@ def copy_path(source_path, target_path):
         shutil.copy(source_path.path, target_path.path)
         return
     if ((isinstance(source_path, RemotePath) and
-         isinstance(target_path, RemotePath) and
-         source_path.host == target_path.host)):
+         isinstance(target_path, RemotePath))):
         with target_path.sftp.open(target_path.path, "w") as f:
             source_path.sftp.getfo(source_path.path, f)
         return
@@ -407,7 +439,19 @@ def mirror_subpath(source_root, target_root, path, exclude_paths,
             stub_type = abs_target_path.get_stub_type()
             abs_source_path.write_stub(stub_type)
 
-## Main logic
+## Path parsing and resolution
+
+def parse_path(path):
+    match = re.match(r"(?:([^@/\\]+)@)?([^:/\\]+):(.+)$", path)
+    if match:
+        host = Host(match.group(2), match.group(1))
+        return RemotePath(host, os.path.abspath(match.group(3)))
+    match = re.match(
+        r"ssh://(?:([^@]+)@)?([^:/\\]+)(?::([^/\\]+))([/\\].+)$", path)
+    if match:
+        host = Host(match.group(2), match.group(1), match.group(3))
+        return RemotePath(host, os.path.abspath(match.group(4)))
+    return LocalPath(path)
 
 def resolve_in_root(source_root, target_root, paths):
     resolved_paths = []
@@ -415,7 +459,6 @@ def resolve_in_root(source_root, target_root, paths):
         # Make absolute *without* resolving symlinks, because
         # otherwise we might end up with a path into some
         # |madeline:dir directory...
-        path = LocalPath(os.path.abspath(path))
         try:
             subpath = path.relative_to(source_root)
         except ValueError:
@@ -439,22 +482,22 @@ def main(args):
     exclude_args = []
     while args:
         if args[0] == "--source":
-            source_root = args[1]
+            source_root = parse_path(args[1])
             args = args[2:]
             continue
         if args[0] == "--target":
-            target_root = args[1]
+            target_root = parse_path(args[1])
             args = args[2:]
             continue
         if args[0] == "--exclude":
-            exclude_args.append(args[1])
+            exclude_args.append(parse_path(args[1]))
             args = args[2:]
             continue
         if reverse is None and args[0] in ("put", "get"):
             reverse = args[0] == "get"
             args = args[1:]
             continue
-        subpath = args[0]
+        subpath = parse_path(args[0])
         if args[0].endswith(os.sep):
             dir_args.append(subpath)
         else:
@@ -473,8 +516,6 @@ def main(args):
             .format(os.environ.get("PWD", "(unknown directory)")))
     # Make paths absolute without resolving symlinks to avoid
     # following stub symlinks.
-    source_root = LocalPath(os.path.abspath(source_root))
-    target_root = LocalPath(os.path.abspath(target_root))
     if ((source_root in target_root.parents or
          target_root in source_root.parents)):
         die("source and target roots are not disjoint")
