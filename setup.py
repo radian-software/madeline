@@ -6,7 +6,7 @@ setup(
     author_email="radon.neon@gmail.com",
     description="Bidirectional sparse-tree directory mirroring.",
     license="MIT",
-    install_requires=[],
+    install_requires=["paramiko"],
     name="madeline",
     scripts=["madeline"],
     url="https://github.com/raxod502/madeline",

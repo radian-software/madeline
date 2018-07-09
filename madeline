@@ -4,6 +4,7 @@ import abc
 import os
 import pathlib
 import shutil
+import stat
 import sys
 import traceback
 
@@ -51,7 +52,7 @@ class Path(abc.ABC):
 
     def is_nonstub(self):
         return (not self.is_stub() and
-                (self.exists() or self.is_symlink()))
+                (self.is_file() or self.is_dir() or self.is_symlink()))
 
     def write_stub(self, stub_type):
         assert stub_type in ("dir", "file", "link")
@@ -98,10 +99,6 @@ class Path(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def exists(self):
-        raise NotImplementedError
-
-    @abc.abstractmethod
     def iterdir(self):
         raise NotImplementedError
 
@@ -131,8 +128,8 @@ class Path(abc.ABC):
 
 class Subpath:
 
-    def __init__(self, pathlike):
-        self.path = pathlib.PurePath(pathlike)
+    def __init__(self, path):
+        self.path = pathlib.PurePath(path)
         if self.path.is_absolute():
             raise ValueError
 
@@ -143,8 +140,8 @@ class Subpath:
 
 class LocalPath(Path):
 
-    def __init__(self, pathlike):
-        self.path = pathlib.Path(pathlike)
+    def __init__(self, path):
+        self.path = pathlib.Path(path)
         if not self.path.is_absolute():
             raise ValueError
 
@@ -180,9 +177,6 @@ class LocalPath(Path):
     def is_symlink(self):
         return self.path.is_symlink()
 
-    def exists(self):
-        return self.path.exists()
-
     def iterdir(self):
         for subdir in self.path.iterdir():
             yield LocalPath(subdir)
@@ -202,11 +196,86 @@ class LocalPath(Path):
     def unlink(self):
         self.path.unlink()
 
-def copy_path(source_path, target_path):
-    if not (isinstance(source_path, LocalPath) and
-            isinstance(target_path, LocalPath)):
+class RemotePath(Path):
+
+    def __init__(self, host, sftp, path):
+        self.host = host
+        self.sftp = sftp
+        self.path = path
+        if not self.path.is_absolute():
+            raise ValueError
+
+    def __str__(self):
+        return "{}:{}".format(self.host, self.path)
+
+    def __eq__(self, other):
+        if isinstance(other, RemotePath):
+            return self.host == other.host and self.path == other.path
+        return False
+
+    def __truediv__(self, other):
+        if isinstance(other, Subpath):
+            return RemotePath(self.host, self.sftp, self.path / other.path)
         raise ValueError
-    shutil.copy(source_path.path, target_path.path)
+
+    @property
+    def parents(self):
+        for parent in self.path.parents:
+            yield RemotePath(self.host, self.sftp, parent)
+
+    def relative_to(self, other):
+        if isinstance(other, RemotePath) and self.host == other.host:
+            return Subpath(self.path.relative_to(other.path))
+        raise ValueError
+
+    def is_file(self):
+        return stat.S_ISREG(self.sftp.lstat(self.path).st_mode)
+
+    def is_dir(self):
+        return stat.S_ISDIR(self.sftp.lstat(self.path).st_mode)
+
+    def is_symlink(self):
+        return stat.S_ISLNK(self.sftp.lstat(self.path).st_mode)
+
+    def iterdir(self):
+        for subdir in self.sftp.listdir_iter(self.path):
+            yield RemotePath(self.host, self.sftp, self.path / subdir)
+
+    def readlink(self):
+        return self.sftp.readlink(self.path)
+
+    def mkdir(self):
+        self.sftp.mkdir(self.path)
+
+    def symlink_to(self, target):
+        self.sftp.symlink(target, self.path)
+
+    def rmdir(self):
+        self.sftp.rmdir(self.path)
+
+    def unlink(self):
+        self.sftp.unlink(self.path)
+
+def copy_path(source_path, target_path):
+    if ((isinstance(source_path, LocalPath) and
+         isinstance(target_path, LocalPath))):
+        shutil.copy(source_path.path, target_path.path)
+        return
+    if ((isinstance(source_path, RemotePath) and
+         isinstance(target_path, RemotePath) and
+         source_path.host == target_path.host)):
+        with target_path.sftp.open(target_path.path, "w") as f:
+            source_path.sftp.getfo(source_path.path, f)
+        return
+    if ((isinstance(source_path, LocalPath) and
+         isinstance(target_path, RemotePath))):
+        target_path.sftp.put(source_path.path, target_path.path)
+        return
+    if ((isinstance(source_path, RemotePath) and
+         isinstance(target_path, LocalPath))):
+        target_path.sftp.get(source_path.path, target_path.path)
+        return
+    raise ValueError
 
 ## Mirroring algorithm
 
