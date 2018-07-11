@@ -18,7 +18,8 @@ import traceback
 ## Logging and exit
 
 USAGE = """\
-usage: madeline --source <source> --target <target> [--identity <identity-file]
+usage: madeline --source <source> --target <target>
+                [--identity <identity-file> | --no-identity]
                 [--ssh-add | --no-ssh-add] [--verbose | --no-verbose]
                 (put | get) [--exclude <path>]... <path>...\
 """
@@ -596,7 +597,10 @@ def resolve_in_root(source_root, target_root, paths):
 def main(args):
     global global_sftp_pool
     if args and args[0] in ("-h", "-?", "-help", "--help", "help"):
-        print(USAGE)
+        print(USAGE, file=sys.stderr)
+        sys.exit(0)
+    if args and args[0] in ("-v", "-V", "--version", "version"):
+        print("madeline pre-release version", file=sys.stderr)
         sys.exit(0)
     literal = False
     source_root = None
@@ -633,6 +637,10 @@ def main(args):
                     die_with_usage()
                 identity = args[1]
                 args = args[2:]
+                continue
+            if args[0] == "--no-identity":
+                identity = None
+                args = args[1:]
                 continue
             if args[0] == "--ssh-add":
                 ssh_add = True
