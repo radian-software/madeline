@@ -261,12 +261,15 @@ class Host:
 
 class SFTPPool:
 
-    def __init__(self, identity=None, ssh_add=False):
+    def __init__(self, identity, ssh_add, verbose):
         self.identity = identity
         self.ssh_add = ssh_add
+        self.verbose = verbose
         self.pool = {}
 
     def open_sftp(self, host):
+        if self.verbose:
+            log_progress("connecting to: {}".format(host))
         # Ways in which this code is a total hack:
         #
         # 1. It goes behind the back of Paramiko to get the keys from
@@ -586,7 +589,7 @@ def resolve_in_root(source_root, target_root, paths):
                 subpath = path.relative_to(target_root)
             except ValueError:
                 die("path is not inside source or target root: {}"
-                    .format(repr(path)))
+                    .format(path))
         resolved_paths.append(subpath)
     return resolved_paths
 
@@ -676,7 +679,8 @@ def main(args):
     except FileNotFoundError:
         die("working directory does not exist: {}"
             .format(os.environ.get("PWD", "(unknown directory)")))
-    global_sftp_pool = SFTPPool(identity=identity, ssh_add=ssh_add)
+    global_sftp_pool = SFTPPool(
+        identity=identity, ssh_add=ssh_add, verbose=verbose)
     # Make paths absolute without resolving symlinks to avoid
     # following stub symlinks.
     if ((source_root in target_root.parents or
@@ -687,6 +691,7 @@ def main(args):
     exclude_paths = resolve_in_root(source_root, target_root, exclude_args)
     if reverse:
         source_root, target_root = target_root, source_root
+    # Establish SSH session before we start syncing.
     for dir_subpath in dir_subpaths:
         mirror_subpath(source_root, target_root, dir_subpath, exclude_paths,
                        recursive=False, with_parents=True, create_stub=True,
