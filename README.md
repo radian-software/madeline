@@ -2,7 +2,9 @@
 
 > a novel approach to directory syncing.
 
+<a href="https://www.instagram.com/theounderstars/">
 <img src="/img/madeline.jpg" alt="Madeline cooking" width="250px" />
+</a>
 
 <!-- use 'markdown-toc -i README.md' to generate table of contents -->
 
