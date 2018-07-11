@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 
 import abc
+import base64
 import getpass
 import os
+import paramiko
 import pathlib
 import re
+import shlex
 import shutil
+import sshpubkeys
 import stat
+import subprocess
 import sys
 import traceback
 
@@ -14,19 +19,37 @@ import traceback
 
 USAGE = """\
 usage: madeline --source <source> --target <target>
+                [--identity <identity-file] [--ssh-add | --no-ssh-add]
                 (put | get) [--exclude <path>]... <path>...\
 """
 
-def warn(message):
+def log(message):
     print("madeline: " + message, file=sys.stderr)
 
+def warn(message):
+    log(message)
+
 def die(message):
-    print("madeline: " + message, file=sys.stderr)
+    log(message)
     sys.exit(1)
 
 def die_with_usage():
     print(USAGE, file=sys.stderr)
     sys.exit(1)
+
+## SSH utility functions
+
+def get_matching_agent_key(identity):
+    with open(identity + ".pub") as f:
+        # This is a hack, see
+        # https://github.com/ojarva/python-sshpubkeys/issues/52.
+        public_key_b64 = base64.b64encode(
+            sshpubkeys.SSHKey(f.read())._decoded_key).decode()
+    for agent_key in paramiko.agent.Agent().get_keys():
+        agent_key_b64 = agent_key.get_base64()
+        if agent_key_b64 == public_key_b64:
+            return agent_key
+    return None
 
 ## Path objects
 
@@ -218,23 +241,87 @@ class Host:
     def __str__(self):
         return self.hostname
 
-    def sftp(self):
-        # FIXME
-        raise NotImplementedError
+class SFTPPool:
+
+    def __init__(self, identity=None, ssh_add=False):
+        self.identity = identity
+        self.ssh_add = ssh_add
+        self.pool = {}
+
+    def open_sftp(self, host):
+        # Ways in which this code is a total hack:
+        #
+        # 1. It goes behind the back of Paramiko to get the keys from
+        #    the ssh-agent manually and then compares their base64
+        #    fingerprints with the desired identity.
+        #
+        # 2. It gets the fingerprint of the desired identity by
+        #    accessing an undocumented internal attribute from the
+        #    sshpubkeys library (see get_matching_agent_key above).
+        #
+        # 3. If the key isn't in the agent, it shells out to
+        #    ssh-add(1) to add it.
+        #
+        # See https://github.com/paramiko/paramiko/issues/1216 and
+        # https://github.com/paramiko/paramiko/issues/778 for why this
+        # disaster has to exist.
+        client = paramiko.SSHClient()
+        client.load_system_host_keys()
+        if self.identity:
+            key = get_matching_agent_key(self.identity)
+            if not key and self.ssh_add:
+                try:
+                    result = subprocess.run(["ssh-add", self.identity])
+                    if result.returncode != 0:
+                        die("command failed: ssh-add {}"
+                            .format(shlex.quote(self.identity)))
+                except FileNotFoundError:
+                    die("command not found: ssh-add")
+                key = get_matching_agent_key(self.identity)
+                if not key:
+                    die("key is supposed to be cached in ssh-agent, but isn't")
+            if key:
+                client.connect(
+                    host.hostname, username=host.user, port=host.port,
+                    pkey=key, allow_agent=False)
+            else:
+                passphrase = getpass.getpass(
+                    prompt="Private key passphrase for {}: ".format(
+                        repr(self.identity)))
+                client.connect(
+                    host.hostname, username=host.user, port=host.port,
+                    passphrase=passphrase, key_filename=self.identity,
+                    allow_agent=False)
+        else:
+            try:
+                client.connect(
+                    host.hostname, username=host.user, port=host.port)
+            except paramiko.PasswordRequiredException:
+                passphrase = getpass.getpass(prompt="Private key passphrase: ")
+                client.connect(
+                    host.hostname, username=host.user, port=host.port,
+                    passphrase=passphrase)
+        return client.open_sftp()
+
+    def get_sftp(self, host):
+        if host not in self.pool:
+            self.pool[host] = self.open_sftp(host)
+        return self.pool[host]
+
+global_sftp_pool = None
 
 class RemotePath(Path):
 
     sftp_pool = {}
+    ssh_add_key = None
 
     @property
     def sftp(self):
-        if self.host not in RemotePath.sftp_pool:
-            RemotePath.sftp_pool[self.host] = self.host.sftp()
-        return RemotePath.sftp_pool[self.host]
+        return global_sftp_pool.get_sftp(self.host)
 
     def __init__(self, host, path):
         self.host = host
-        self.path = path
+        self.path = pathlib.Path(path)
         if not self.path.is_absolute():
             raise ValueError
 
@@ -262,32 +349,41 @@ class RemotePath(Path):
         raise ValueError
 
     def is_file(self):
-        return stat.S_ISREG(self.sftp.lstat(self.path).st_mode)
+        try:
+            return stat.S_ISREG(self.sftp.lstat(str(self.path)).st_mode)
+        except FileNotFoundError:
+            return False
 
     def is_dir(self):
-        return stat.S_ISDIR(self.sftp.lstat(self.path).st_mode)
+        try:
+            return stat.S_ISDIR(self.sftp.lstat(str(self.path)).st_mode)
+        except FileNotFoundError:
+            return False
 
     def is_symlink(self):
-        return stat.S_ISLNK(self.sftp.lstat(self.path).st_mode)
+        try:
+            return stat.S_ISLNK(self.sftp.lstat(str(self.path)).st_mode)
+        except FileNotFoundError:
+            return False
 
     def iterdir(self):
-        for subdir in self.sftp.listdir_iter(self.path):
+        for subdir in self.sftp.listdir_iter(str(self.path)):
             yield RemotePath(self.host, self.path / subdir)
 
     def readlink(self):
-        return self.sftp.readlink(self.path)
+        return self.sftp.readlink(str(self.path))
 
     def mkdir(self):
-        self.sftp.mkdir(self.path)
+        self.sftp.mkdir(str(self.path))
 
     def symlink_to(self, target):
-        self.sftp.symlink(target, self.path)
+        self.sftp.symlink(target, str(self.path))
 
     def rmdir(self):
-        self.sftp.rmdir(self.path)
+        self.sftp.rmdir(str(self.path))
 
     def unlink(self):
-        self.sftp.unlink(self.path)
+        self.sftp.unlink(str(self.path))
 
 def copy_path(source_path, target_path):
     if ((isinstance(source_path, LocalPath) and
@@ -296,16 +392,16 @@ def copy_path(source_path, target_path):
         return
     if ((isinstance(source_path, RemotePath) and
          isinstance(target_path, RemotePath))):
-        with target_path.sftp.open(target_path.path, "w") as f:
-            source_path.sftp.getfo(source_path.path, f)
+        with target_path.sftp.open(str(target_path.path), "w") as f:
+            source_path.sftp.getfo(str(source_path.path), f)
         return
     if ((isinstance(source_path, LocalPath) and
          isinstance(target_path, RemotePath))):
-        target_path.sftp.put(source_path.path, target_path.path)
+        target_path.sftp.put(str(source_path.path), str(target_path.path))
         return
     if ((isinstance(source_path, RemotePath) and
          isinstance(target_path, LocalPath))):
-        target_path.sftp.get(source_path.path, target_path.path)
+        target_path.sftp.get(str(source_path.path), str(target_path.path))
         return
     raise ValueError
 
@@ -451,7 +547,7 @@ def parse_path(path):
     if match:
         host = Host(match.group(2), match.group(1), match.group(3))
         return RemotePath(host, os.path.abspath(match.group(4)))
-    return LocalPath(path)
+    return LocalPath(os.path.abspath(path))
 
 def resolve_in_root(source_root, target_root, paths):
     resolved_paths = []
@@ -471,6 +567,7 @@ def resolve_in_root(source_root, target_root, paths):
     return resolved_paths
 
 def main(args):
+    global global_sftp_pool
     if args and args[0] in ("-h", "-?", "-help", "--help", "help"):
         print(USAGE)
         sys.exit(0)
@@ -480,23 +577,47 @@ def main(args):
     dir_args = []
     path_args = []
     exclude_args = []
+    identity = None
+    ssh_add = False
     while args:
         if args[0] == "--source":
+            if len(args) < 2:
+                die_with_usage()
             source_root = parse_path(args[1])
             args = args[2:]
             continue
         if args[0] == "--target":
+            if len(args) < 2:
+                die_with_usage()
             target_root = parse_path(args[1])
             args = args[2:]
             continue
         if args[0] == "--exclude":
+            if len(args) < 2:
+                die_with_usage()
             exclude_args.append(parse_path(args[1]))
             args = args[2:]
             continue
-        if reverse is None and args[0] in ("put", "get"):
-            reverse = args[0] == "get"
+        if args[0] == "--identity":
+            if len(args) < 2:
+                die_with_usage()
+            identity = args[1]
+            args = args[2:]
+            continue
+        if args[0] == "--ssh-add":
+            ssh_add = True
             args = args[1:]
             continue
+        if args[0] == "--no-ssh-add":
+            ssh_add = False
+            args = args[1:]
+            continue
+        if reverse is None:
+            if args[0] in ("put", "get"):
+                reverse = args[0] == "get"
+                args = args[1:]
+                continue
+            die_with_usage()
         subpath = parse_path(args[0])
         if args[0].endswith(os.sep):
             dir_args.append(subpath)
@@ -514,6 +635,7 @@ def main(args):
     except FileNotFoundError:
         die("working directory does not exist: {}"
             .format(os.environ.get("PWD", "(unknown directory)")))
+    global_sftp_pool = SFTPPool(identity=identity, ssh_add=ssh_add)
     # Make paths absolute without resolving symlinks to avoid
     # following stub symlinks.
     if ((source_root in target_root.parents or
@@ -534,10 +656,7 @@ def main(args):
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    debug = False
-    if args and args[0] == "--debug":
-        debug = True
-        args = args[1:]
+    debug = os.environ.get("MADELINE_DEBUG")
     try:
         main(args)
     except SystemExit as e:
