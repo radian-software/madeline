@@ -18,8 +18,8 @@ import traceback
 ## Logging and exit
 
 USAGE = """\
-usage: madeline --source <source> --target <target>
-                [--identity <identity-file] [--ssh-add | --no-ssh-add]
+usage: madeline --source <source> --target <target> [--identity <identity-file]
+                [--ssh-add | --no-ssh-add] [--verbose | --no-verbose]
                 (put | get) [--exclude <path>]... <path>...\
 """
 
@@ -36,6 +36,20 @@ def die(message):
 def die_with_usage():
     print(USAGE, file=sys.stderr)
     sys.exit(1)
+
+global_last_progress_message = None
+
+def log_progress(message):
+    global global_last_progress_message
+    if global_last_progress_message:
+        sys.stderr.write("\r")
+        num_blanks = max(0, len(global_last_progress_message) - len(message))
+    else:
+        num_blanks = 0
+    sys.stderr.write(message)
+    sys.stderr.write(" " * num_blanks)
+    sys.stderr.flush()
+    global_last_progress_message = message
 
 ## SSH utility functions
 
@@ -163,6 +177,9 @@ class Subpath:
             return self.path == other.path
         return False
 
+    def __str__(self):
+        return str(self.path)
+
 class LocalPath(Path):
 
     def __init__(self, path):
@@ -203,8 +220,9 @@ class LocalPath(Path):
         return self.path.is_symlink()
 
     def iterdir(self):
-        for subdir in self.path.iterdir():
-            yield LocalPath(subdir)
+        subdirs = list(self.path.iterdir())
+        subdirs.sort()
+        return [LocalPath(subdir) for subdir in subdirs]
 
     def readlink(self):
         return os.readlink(self.path)
@@ -367,8 +385,11 @@ class RemotePath(Path):
             return False
 
     def iterdir(self):
-        for subdir in self.sftp.listdir_iter(str(self.path)):
-            yield RemotePath(self.host, self.path / subdir)
+        attrs = self.sftp.listdir_attr(str(self.path))
+        filenames = [attr.filename for attr in attrs]
+        filenames.sort()
+        return [RemotePath(self.host, self.path / filename)
+                for filename in filenames]
 
     def readlink(self):
         return self.sftp.readlink(str(self.path))
@@ -401,14 +422,16 @@ def copy_path(source_path, target_path):
         return
     if ((isinstance(source_path, RemotePath) and
          isinstance(target_path, LocalPath))):
-        target_path.sftp.get(str(source_path.path), str(target_path.path))
+        source_path.sftp.get(str(source_path.path), str(target_path.path))
         return
     raise ValueError
 
 ## Mirroring algorithm
 
 def mirror_subpath(source_root, target_root, path, exclude_paths,
-                   recursive, with_parents, create_stub):
+                   recursive, with_parents, create_stub, verbose):
+    if verbose:
+        log_progress("mirroring: {}".format(path))
     exclude_paths = [path for path in exclude_paths
                      if (source_root / path).is_nonstub()]
     abs_source_path = source_root / path
@@ -429,7 +452,8 @@ def mirror_subpath(source_root, target_root, path, exclude_paths,
             path_parent = abs_target_parent.relative_to(target_root)
             mirror_subpath(
                 source_root, target_root, path_parent, exclude_paths,
-                recursive=False, with_parents=False, create_stub=True)
+                recursive=False, with_parents=False, create_stub=True,
+                verbose=verbose)
     if abs_source_path.is_dir():
         # If there is a file or symlink, we can't mirror a directory
         # there.
@@ -507,7 +531,7 @@ def mirror_subpath(source_root, target_root, path, exclude_paths,
                 mirror_subpath(
                     source_root, target_root, path_child, exclude_paths,
                     recursive=True, with_parents=False,
-                    create_stub=not should_delete_directory)
+                    create_stub=not should_delete_directory, verbose=verbose)
         # There shouldn't be anything left in the source directory by
         # now if should_delete_directory was true.
         if should_delete_directory:
@@ -571,6 +595,7 @@ def main(args):
     if args and args[0] in ("-h", "-?", "-help", "--help", "help"):
         print(USAGE)
         sys.exit(0)
+    literal = False
     source_root = None
     target_root = None
     reverse = None
@@ -579,39 +604,55 @@ def main(args):
     exclude_args = []
     identity = None
     ssh_add = False
+    verbose = False
     while args:
-        if args[0] == "--source":
-            if len(args) < 2:
+        if not literal:
+            if args[0] == "--source":
+                if len(args) < 2:
+                    die_with_usage()
+                source_root = parse_path(args[1])
+                args = args[2:]
+                continue
+            if args[0] == "--target":
+                if len(args) < 2:
+                    die_with_usage()
+                target_root = parse_path(args[1])
+                args = args[2:]
+                continue
+            if args[0] == "--exclude":
+                if len(args) < 2:
+                    die_with_usage()
+                exclude_args.append(parse_path(args[1]))
+                args = args[2:]
+                continue
+            if args[0] == "--identity":
+                if len(args) < 2:
+                    die_with_usage()
+                identity = args[1]
+                args = args[2:]
+                continue
+            if args[0] == "--ssh-add":
+                ssh_add = True
+                args = args[1:]
+                continue
+            if args[0] == "--no-ssh-add":
+                ssh_add = False
+                args = args[1:]
+                continue
+            if args[0] == "--verbose":
+                verbose = True
+                args = args[1:]
+                continue
+            if args[0] == "--no-verbose":
+                verbose = False
+                args = args[1:]
+                continue
+            if args[0] == "--":
+                literal = True
+                args = args[1:]
+                continue
+            if args[0].startswith("-"):
                 die_with_usage()
-            source_root = parse_path(args[1])
-            args = args[2:]
-            continue
-        if args[0] == "--target":
-            if len(args) < 2:
-                die_with_usage()
-            target_root = parse_path(args[1])
-            args = args[2:]
-            continue
-        if args[0] == "--exclude":
-            if len(args) < 2:
-                die_with_usage()
-            exclude_args.append(parse_path(args[1]))
-            args = args[2:]
-            continue
-        if args[0] == "--identity":
-            if len(args) < 2:
-                die_with_usage()
-            identity = args[1]
-            args = args[2:]
-            continue
-        if args[0] == "--ssh-add":
-            ssh_add = True
-            args = args[1:]
-            continue
-        if args[0] == "--no-ssh-add":
-            ssh_add = False
-            args = args[1:]
-            continue
         if reverse is None:
             if args[0] in ("put", "get"):
                 reverse = args[0] == "get"
@@ -648,17 +689,25 @@ def main(args):
         source_root, target_root = target_root, source_root
     for dir_subpath in dir_subpaths:
         mirror_subpath(source_root, target_root, dir_subpath, exclude_paths,
-                       recursive=False, with_parents=True, create_stub=True)
+                       recursive=False, with_parents=True, create_stub=True,
+                       verbose=verbose)
     for subpath in subpaths:
         mirror_subpath(source_root, target_root, subpath, exclude_paths,
-                       recursive=True, with_parents=True, create_stub=True)
+                       recursive=True, with_parents=True, create_stub=True,
+                       verbose=verbose)
+    if verbose:
+        log_progress("mirroring done.")
     sys.exit(0)
 
 if __name__ == "__main__":
     args = sys.argv[1:]
     debug = os.environ.get("MADELINE_DEBUG")
     try:
-        main(args)
+        try:
+            main(args)
+        finally:
+            if global_last_progress_message:
+                print(file=sys.stderr)
     except SystemExit as e:
         if debug and e.code != 0:
             traceback.print_exc()
