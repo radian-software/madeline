@@ -10,5 +10,5 @@ setup(
     name="madeline",
     scripts=["madeline"],
     url="https://github.com/raxod502/madeline",
-    version=None,
+    version="1.0",
 )
