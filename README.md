@@ -330,7 +330,7 @@ or the target directory.
 If a path ends with a trailing slash and is a directory, then only
 stubs and not its contents are copied. Otherwise, copying is
 recursive. However, you can exclude a path and its children from being
-copied by passing `--exclude-path <path>` as one of the arguments.
+copied by passing `--exclude <path>` as one of the arguments.
 
 To allow specifying path names that look like options, the special
 argument `--` is supported.
