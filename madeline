@@ -24,33 +24,51 @@ usage: madeline --source <source> --target <target>
                 (put | get) [--exclude <path>]... <path>...\
 """
 
-def log(message):
-    print("madeline: " + message, file=sys.stderr)
+global_last_status = None
+
+def clear_status(flush=True):
+    global global_last_status
+    if global_last_status is not None:
+        sys.stderr.write("\r")
+        sys.stderr.write(" " * len(global_last_status))
+        sys.stderr.write("\r")
+        if flush:
+            sys.stderr.flush()
+        global_last_status = None
+
+def write_status(status, clear=True):
+    global global_last_status
+    if clear:
+        clear_status(flush=False)
+    sys.stderr.write(status)
+    sys.stderr.write("\r")
+    sys.stderr.flush()
+    global_last_status = status
+
+def finalize_status():
+    if global_last_status is not None:
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+
+def log(message, preserve=True):
+    last_status = global_last_status
+    clear_status(flush=False)
+    sys.stderr.write(message)
+    sys.stderr.write("\n")
+    sys.stderr.flush()
+    if preserve:
+        write_status(last_status, clear=False)
 
 def warn(message):
-    log(message)
+    log("madeline: " + message)
 
 def die(message):
-    log(message)
+    log("madeline: " + message, preserve=False)
     sys.exit(1)
 
 def die_with_usage():
-    print(USAGE, file=sys.stderr)
+    log(USAGE)
     sys.exit(1)
-
-global_last_progress_message = None
-
-def log_progress(message):
-    global global_last_progress_message
-    if global_last_progress_message:
-        sys.stderr.write("\r")
-        num_blanks = max(0, len(global_last_progress_message) - len(message))
-    else:
-        num_blanks = 0
-    sys.stderr.write(message)
-    sys.stderr.write(" " * num_blanks)
-    sys.stderr.flush()
-    global_last_progress_message = message
 
 ## SSH utility functions
 
@@ -270,7 +288,7 @@ class SFTPPool:
 
     def open_sftp(self, host):
         if self.verbose:
-            log_progress("connecting to: {}".format(host))
+            write_status("connecting to: {}".format(host))
         # Ways in which this code is a total hack:
         #
         # 1. It goes behind the back of Paramiko to get the keys from
@@ -435,7 +453,7 @@ def copy_path(source_path, target_path):
 def mirror_subpath(source_root, target_root, path, exclude_paths,
                    recursive, with_parents, create_stub, verbose):
     if verbose:
-        log_progress("mirroring: {}".format(path))
+        write_status("mirroring: {}".format(path))
     exclude_paths = [path for path in exclude_paths
                      if (source_root / path).is_nonstub()]
     abs_source_path = source_root / path
@@ -709,7 +727,7 @@ def main(args):
                        recursive=True, with_parents=True, create_stub=True,
                        verbose=verbose)
     if verbose:
-        log_progress("mirroring done.")
+        write_status("mirroring done.")
     sys.exit(0)
 
 if __name__ == "__main__":
@@ -719,8 +737,7 @@ if __name__ == "__main__":
         try:
             main(args)
         finally:
-            if global_last_progress_message:
-                print(file=sys.stderr)
+            finalize_status()
     except SystemExit as e:
         if debug and e.code != 0:
             traceback.print_exc()
