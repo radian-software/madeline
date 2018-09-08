@@ -5,7 +5,7 @@ The format is based (loosely) on [Keep a Changelog].
 
 [keep a changelog]: http://keepachangelog.com/
 
-## Unreleased
+## 1.0.1 (released 2018-09-08)
 ### Fixed
 * Previously, if Madeline encountered an error or warning while
   mirroring verbosely, the error or warning message would be
