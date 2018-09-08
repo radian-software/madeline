@@ -10,7 +10,7 @@ The format is based (loosely) on [Keep a Changelog].
 * Previously, if Madeline encountered an error or warning while
   mirroring verbosely, the error or warning message would be
   distastefully interspersed with the verbose status messages. This
-  has been fixed, and acts the way you would expect.
+  has been fixed, and now acts the way you would expect.
 
 ## 1.0 (released 2018-08-01)
 ### Added
