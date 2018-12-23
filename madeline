@@ -56,7 +56,7 @@ def log(message, preserve=True):
     sys.stderr.write(message)
     sys.stderr.write("\n")
     sys.stderr.flush()
-    if preserve:
+    if preserve and last_status is not None:
         write_status(last_status, clear=False)
 
 def warn(message):

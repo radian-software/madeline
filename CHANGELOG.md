@@ -5,6 +5,13 @@ The format is based (loosely) on [Keep a Changelog].
 
 [keep a changelog]: http://keepachangelog.com/
 
+## Unreleased
+### Fixed
+* Previously, Madeline died with a traceback saying `TypeError:
+  write() argument must be str, not None` when used with incorrect
+  command-line arguments, under some circumstances. This has now been
+  fixed.
+
 ## 1.0.1 (released 2018-09-08)
 ### Fixed
 * Previously, if Madeline encountered an error or warning while
