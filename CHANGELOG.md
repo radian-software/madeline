@@ -11,6 +11,10 @@ The format is based (loosely) on [Keep a Changelog].
   write() argument must be str, not None` when used with incorrect
   command-line arguments, under some circumstances. This has now been
   fixed.
+* The usefulness of Madeline's `--verbose` progress messages has been
+  improved. Previously, in some circumstances, the parent directory of
+  a file would be displayed while the file was being transferred,
+  instead of the file itself. This has been fixed.
 
 ## 1.0.1 (released 2018-09-08)
 ### Fixed

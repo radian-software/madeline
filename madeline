@@ -475,7 +475,7 @@ def mirror_subpath(source_root, target_root, path, exclude_paths,
             mirror_subpath(
                 source_root, target_root, path_parent, exclude_paths,
                 recursive=False, with_parents=False, create_stub=True,
-                verbose=verbose)
+                verbose=False)
     if abs_source_path.is_dir():
         # If there is a file or symlink, we can't mirror a directory
         # there.
@@ -554,6 +554,8 @@ def mirror_subpath(source_root, target_root, path, exclude_paths,
                     source_root, target_root, path_child, exclude_paths,
                     recursive=True, with_parents=False,
                     create_stub=not should_delete_directory, verbose=verbose)
+        if verbose:
+            write_status("mirroring: {}".format(path))
         # There shouldn't be anything left in the source directory by
         # now if should_delete_directory was true.
         if should_delete_directory:
