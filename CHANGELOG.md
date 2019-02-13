@@ -5,7 +5,7 @@ The format is based (loosely) on [Keep a Changelog].
 
 [keep a changelog]: http://keepachangelog.com/
 
-## Unreleased
+## 1.0.2 (released 2019-02-12)
 ### Fixed
 * Previously, Madeline died with a traceback saying `TypeError:
   write() argument must be str, not None` when used with incorrect
