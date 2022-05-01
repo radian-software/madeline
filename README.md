@@ -1,5 +1,8 @@
 # Madeline
 
+**DEPRECATED:** This idea, while interesting, never served my use case
+terribly well in the end, and the implementation is terrible.
+
 > a novel approach to directory syncing.
 
 <a href="https://www.instagram.com/theounderstars/">
