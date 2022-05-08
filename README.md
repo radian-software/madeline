@@ -301,7 +301,7 @@ You can also exclude subpaths of the paths you are mirroring:
 
 On any platform, you may install Madeline using [Pip]:
 
-    $ pip3 install git+https://github.com/raxod502/madeline.git
+    $ pip3 install git+https://github.com/radian-software/madeline.git
 
 You may wish to perform a user-local installation by passing the
 `--user` flag.
